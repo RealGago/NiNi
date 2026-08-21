@@ -1,4 +1,5 @@
 use crate::app::{App, PendingKey, Popup, Screen};
+use crate::providers;
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, Wrap};
 
@@ -344,7 +345,7 @@ fn draw_chat(f: &mut Frame, app: &App) {
     for line in &lines {
         let line_width = line.width() as u16;
         if inner_chat_width > 0 && line_width > inner_chat_width {
-            total_virtual_lines += (line_width + inner_chat_width - 1) / inner_chat_width;
+            total_virtual_lines += line_width.div_ceil(inner_chat_width);
         } else {
             total_virtual_lines += 1;
         }
@@ -499,11 +500,12 @@ fn draw_chat(f: &mut Frame, app: &App) {
             let area = centered_rect(50, 25, size);
             f.render_widget(Clear, area);
 
-            let provider_items = vec![
-                ListItem::new("1. OpenRouter (Free Models)"),
-                ListItem::new("2. OpenCode Zen"),
-            ];
-
+            let provider_items: Vec<ListItem> = providers::PROVIDERS
+                .iter()
+                .enumerate()
+                .map(|(i, p)| ListItem::new(format!("{}, {}", i + 1, p.display_name)))
+                .collect();
+                    
             let list = List::new(provider_items)
                 .block(
                     Block::default()
@@ -522,7 +524,7 @@ fn draw_chat(f: &mut Frame, app: &App) {
             let area = centered_rect(70, 60, size);
             f.render_widget(Clear, area);
 
-            let title = format!(" Provider: {} ", provider.label());
+            let title = format!(" Provider: {} ", provider.label);
             let model_items: Vec<ListItem> = models.iter().map(|m| ListItem::new(m.clone())).collect();
 
             let list = List::new(model_items)

@@ -1,7 +1,6 @@
-use crate::models::{ChatResponse, KeyResponse, Message, ModelsResponse};
+use crate::{models::{ChatResponse, KeyResponse, Message, ModelsResponse}};
 use anyhow::{Context, Result};
-
-pub const DAILY_LIMIT_HINT: &str = "limit: 50/day with no credits purchased, 1000/day with $10+ purchased";
+use crate::app::Provider;
 
 pub enum ProviderError {
     RateLimited,
@@ -52,84 +51,57 @@ fn map_provider_err(e: ProviderError) -> anyhow::Error {
     }
 }
 
-/// Default chat flow: tries OpenCode Zen first (if key set) as a safety net,
-/// falls back to OpenRouter with the given model on rate limit/failure.
-/// Skips the OpenRouter fallback entirely if openrouter_key is empty, to avoid
-/// a guaranteed 401 when only OpenCode was configured.
 pub async fn send_chat(
     client: &reqwest::Client,
-    opencode_key: Option<&str>,
-    openrouter_key: &str,
+    api_keys: &std::collections::HashMap<&'static str, String>,
     model: &str,
     history: &[Message],
 ) -> Result<(String, Option<String>)> {
-    if let Some(oc_key) = opencode_key {
-        match send_chat_to_provider(client, "https://opencode.ai/zen/v1", oc_key, "big-pickle", history).await {
-            Ok(reply) => return Ok((reply, None)),
-            Err(err) => {
-                if openrouter_key.is_empty() {
-                    return Err(map_provider_err(err));
-                }
-                let notice = match err {
-                    ProviderError::RateLimited => "OpenCode Zen rate-limited, used OpenRouter",
-                    ProviderError::Other(_) => "OpenCode Zen failed, used OpenRouter",
+    let ordered = crate::providers::available_providers_in_fallback_order(api_keys);
+
+    if ordered.is_empty() {
+          anyhow::bail!("no API key configured for any provider");
+    }
+
+
+    let mut last_err = None;
+    for (i, provider) in ordered.iter().enumerate() {
+        let key = &api_keys[provider.key_env];
+        match send_chat_to_provider(client, provider.base_url, key, model, history).await {
+            Ok(reply) => {
+                let notice = if i == 0 {
+                    None
+                } else {
+                    Some(format!("{} failed, used {}", ordered[i - 1].label, provider.label))
                 };
-                let reply = send_chat_to_provider(client, "https://openrouter.ai/api/v1", openrouter_key, model, history)
-                    .await
-                    .map_err(map_provider_err)?;
-                return Ok((reply, Some(notice.to_string())));
+                return Ok((reply, notice));
             }
+            Err(e) => last_err = Some(e),
         }
     }
-
-    if openrouter_key.is_empty() {
-        anyhow::bail!("no API key configured for any provider");
-    }
-
-    let reply = send_chat_to_provider(client, "https://openrouter.ai/api/v1", openrouter_key, model, history)
-        .await
-        .map_err(map_provider_err)?;
-    Ok((reply, None))
+    Err(map_provider_err(last_err.unwrap()))
 }
 
-/// Used when the user explicitly picked OpenCode Zen via the /models popup.
-/// No automatic fallback here — if it fails, the error is surfaced directly.
-pub async fn send_chat_opencode_direct(
-    client: &reqwest::Client,
-    opencode_key: Option<&str>,
-    model: &str,
-    history: &[Message],
-) -> Result<(String, Option<String>)> {
-    let key = opencode_key.context("OPENCODE_API_KEY is not set")?;
-    let reply = send_chat_to_provider(client, "https://opencode.ai/zen/v1", key, model, history)
-        .await
-        .map_err(map_provider_err)?;
-    Ok((reply, None))
-}
+   
 
+
+// a guaranteed 401 when only OpenCode was configured.
 /// Fetches the list of free model IDs available on OpenRouter.
-pub async fn fetch_free_model_ids(client: &reqwest::Client) -> Result<Vec<String>> {
-    let resp = client
-        .get("https://openrouter.ai/api/v1/models")
-        .send()
-        .await
-        .context("failed to connect to the OpenRouter models API")?;
+pub async fn fetch_model_ids(client: &reqwest::Client, provider: Provider, api_key: Option<&str>) -> Result<Vec<String>> {
+    let mut req = client.get(format!("{}/models", provider.base_url));
+    if let Some(key) = api_key {
+        req = req.header("Authorization", format!("Bearer {}", key));
+    }
+    let resp = req.send().await.context("failed to connect to models API")?;
+    let data: ModelsResponse = resp.json().await.context("failed to parse models response")?;
 
-    let data: ModelsResponse = resp
-        .json()
-        .await
-        .context("failed to parse OpenRouter models response")?;
-
-    let mut ids: Vec<String> = data
-        .data
-        .into_iter()
-        .map(|m| m.id)
-        .filter(|id| id.ends_with(":free"))
-        .collect();
+    let mut ids: Vec<String> = data.data.into_iter().map(|m| m.id).collect();
+    if provider.filter_free {
+        ids.retain(|id| id.ends_with(":free"));
+    }
     ids.sort();
     Ok(ids)
 }
-
 /// Fetches the list of model IDs available on OpenCode Zen.
 pub async fn fetch_opencode_model_ids(client: &reqwest::Client, api_key: &str) -> Result<Vec<String>> {
     let resp = client
@@ -149,24 +121,4 @@ pub async fn fetch_opencode_model_ids(client: &reqwest::Client, api_key: &str) -
     Ok(ids)
 }
 
-/// Fetches how many requests have already been used today on the OpenRouter key.
-/// Returns an error immediately if no key is set, instead of calling the API with an empty key.
-pub async fn get_usage_daily(client: &reqwest::Client, api_key: &str) -> Result<Option<f64>> {
-    if api_key.is_empty() {
-        anyhow::bail!("OpenRouter API key is not set");
-    }
 
-    let resp = client
-        .get("https://openrouter.ai/api/v1/key")
-        .header("Authorization", format!("Bearer {}", api_key))
-        .send()
-        .await
-        .context("failed to connect to the key/usage API")?;
-
-    let data: KeyResponse = resp
-        .json()
-        .await
-        .context("failed to parse usage response")?;
-
-    Ok(data.data.usage_daily)
-}

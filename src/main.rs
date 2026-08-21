@@ -4,7 +4,7 @@ mod commands;
 mod models;
 mod ui;
 mod theme;
-
+mod providers;
 use anyhow::Result;
 use app::{App, Popup, Provider, Screen};
 use commands::{parse_command, Command, COMMAND_LIST};
@@ -19,10 +19,10 @@ use std::io;
 use std::time::Duration;
 use tokio::sync::mpsc;
 
+
 enum AsyncResult {
     Chat(Result<(String, Option<String>), String>),
     Models(Provider, Result<Vec<String>, String>),
-    Usage(Result<Option<f64>, String>),
 }
 
 enum PopupAction {
@@ -39,22 +39,13 @@ enum PopupAction {
 #[tokio::main]
 async fn main() -> Result<()> {
     dotenvy::dotenv().ok();
-
-    let openrouter_key_env = env::var("OPENROUTER_API_KEY").ok();
-    let opencode_key_env = env::var("OPENCODE_API_KEY").ok();
     let client = reqwest::Client::new();
 
     // Public, no key needed to list free models from OpenRouter.
-    let free_models = api::fetch_free_model_ids(&client).await.unwrap_or_default();
+    let free_models = api::fetch_model_ids(&client, &providers::PROVIDERS[0], None).await.unwrap_or_default();
 
-    // App::new already decides Screen::Splash vs Screen::Chat based on the keys 
-    let mut app = App::new(
-        "openrouter/free".to_string(),
-        free_models,
-        openrouter_key_env,
-        opencode_key_env,
-    );
-
+    
+    let mut app = App::new("openrouter/free".to_string(), free_models);
     let (tx, mut rx) = mpsc::unbounded_channel::<AsyncResult>();
 
     enable_raw_mode()?;
@@ -69,13 +60,14 @@ async fn main() -> Result<()> {
 
         if event::poll(Duration::from_millis(100))? {
             match event::read()? {
-                Event::Key(key) => {
-                    if key.kind == KeyEventKind::Press {
+                Event::Key(key) 
+                    if key.kind == KeyEventKind::Press => {
                          match &app.screen {
                             Screen::Splash { .. } => handle_splash_key(key.code, &mut app),
                             Screen::Chat => handle_chat_key(key.code, key.modifiers, &mut app, &client, &tx),
-                        }                    }
-                }
+                        }                    
+                    }
+                
                 Event::Mouse(mouse_event) => {
                     if let Screen::Chat = app.screen {
                         match mouse_event.kind {
@@ -105,7 +97,7 @@ async fn main() -> Result<()> {
                 }
                 AsyncResult::Chat(Err(e)) => app.status = format!("error: {}", e),
                 AsyncResult::Models(provider, Ok(models)) => {
-                    app.status = format!("loaded {} models from {}", models.len(), provider.label());
+                    app.status = format!("loaded {} models from {}", models.len(), provider.label);
                     app.popup = Popup::SelectModel {
                         provider,
                         models,
@@ -116,11 +108,6 @@ async fn main() -> Result<()> {
                     app.status = format!("error fetching models: {}", e);
                     app.popup = Popup::None;
                 }
-                AsyncResult::Usage(Ok(Some(usage))) => {
-                    app.status = format!("usage today: {} ({})", usage, api::DAILY_LIMIT_HINT)
-                }
-                AsyncResult::Usage(Ok(None)) => app.status = "usage unavailable".to_string(),
-                AsyncResult::Usage(Err(e)) => app.status = format!("error fetching usage: {}", e),
             }
         }
 
@@ -169,21 +156,14 @@ fn handle_splash_key(code: KeyCode, app: &mut App) {
     }
 
     if let Some((env_name, value)) = collected {
-        match env_name {
-            "OPENROUTER_API_KEY" => app.openrouter_key = value,
-            "OPENCODE_API_KEY" => app.opencode_key = Some(value),
-            _ => {}
+        app.api_keys.insert(env_name, value);
         }
-    }
 
     if advanced {
         let finished = matches!(&app.screen, Screen::Splash { pending, idx, .. } if *idx >= pending.len());
 
         if finished {
-            let has_openrouter = !app.openrouter_key.is_empty();
-            let has_opencode = app.opencode_key.as_ref().map_or(false, |k| !k.is_empty());
-
-            if has_openrouter || has_opencode {
+           if !app.api_keys.is_empty() {
                 app.screen = Screen::Chat;
                 app.status = "ready".to_string();
             } else {
@@ -249,11 +229,11 @@ fn handle_chat_key(
                 };
                 input.clear();
             }
-            KeyCode::Char(c) if c.is_ascii_digit() => {
-                if input.len() < 3 {
+            KeyCode::Char(c) if c.is_ascii_digit() 
+                && input.len() < 3 => {
                     input.push(c);
                 }
-            }
+            
             KeyCode::Backspace => {
                 input.pop();
             }
@@ -323,36 +303,39 @@ fn handle_chat_key(
             app.popup_close();
             app.status = "history cleared".to_string();
         }
-        PopupAction::SelectProvider(selected) => {
-            let provider = if selected == 0 { Provider::OpenRouter } else { Provider::OpenCode };
-            app.popup = Popup::Loading;
-            app.status = format!("fetching {} models...", provider.label());
+        
+    PopupAction::SelectProvider(selected) => {
+        let provider = &providers::PROVIDERS[selected];
+        app.popup = Popup::Loading;
+        app.status = format!("fetching {} models...", provider.label);
 
-            let client = client.clone();
-            let tx = tx.clone();
-            let opencode_key = app.opencode_key.clone();
+        let client = client.clone();
+        let tx = tx.clone();
+        let api_key = app.api_keys.get(provider.key_env).cloned();
 
-            tokio::spawn(async move {
-                let res = match provider {
-                    Provider::OpenRouter => api::fetch_free_model_ids(&client).await.map_err(|e| e.to_string()),
-                    Provider::OpenCode => match opencode_key {
-                        Some(key) => api::fetch_opencode_model_ids(&client, &key).await.map_err(|e| e.to_string()),
-                        None => Err("OPENCODE_API_KEY is not set".to_string()),
-                    },
-                };
-                tx.send(AsyncResult::Models(provider, res)).ok();
-            });
-        }
+        tokio::spawn(async move {
+            let res = api::fetch_model_ids(&client, provider, api_key.as_deref())
+                .await
+                .map_err(|e| e.to_string());
+            tx.send(AsyncResult::Models(provider, res)).ok();
+        });
+    }
+
+
+
         PopupAction::SelectModel(provider, selected) => {
-            if let Popup::SelectModel { models, .. } = &app.popup {
-                if let Some(chosen_model) = models.get(selected) {
+            if let Popup::SelectModel { models, .. } = &app.popup 
+                && let Some(chosen_model) = models.get(selected) {
                     app.model = chosen_model.clone();
                     app.provider = provider;
-                    app.status = format!("model switched to: {} ({})", app.model, provider.label());
+                    app.status = format!("model switched to: {} ({})", app.model, provider.label);
                 }
-            }
             app.popup_close();
-        }
+            }
+
+           
+    
+        
         PopupAction::None => match code {
             KeyCode::Esc => app.should_quit = true,
 
@@ -381,8 +364,8 @@ fn handle_chat_key(
 
             // Cursor navigation is char-boundary aware to stay safe with UTF-8
             // (accented characters like á, ç, ã take more than 1 byte).
-            KeyCode::Left => {
-                if app.cursor_position > 0 {
+            KeyCode::Left
+                if app.cursor_position > 0 => {
                     let prev_len = app.input[..app.cursor_position]
                         .chars()
                         .last()
@@ -390,9 +373,9 @@ fn handle_chat_key(
                         .unwrap_or(1);
                     app.cursor_position -= prev_len;
                 }
-            }
-            KeyCode::Right => {
-                if app.cursor_position < app.input.len() {
+            
+            KeyCode::Right 
+                if app.cursor_position < app.input.len() => {
                     let next_len = app.input[app.cursor_position..]
                         .chars()
                         .next()
@@ -400,9 +383,9 @@ fn handle_chat_key(
                         .unwrap_or(1);
                     app.cursor_position += next_len;
                 }
-            }
-            KeyCode::Backspace => {
-                if app.cursor_position > 0 {
+            
+            KeyCode::Backspace
+                if app.cursor_position > 0 => {
                     let prev_len = app.input[..app.cursor_position]
                         .chars()
                         .last()
@@ -412,7 +395,7 @@ fn handle_chat_key(
                     app.input.remove(new_pos);
                     app.cursor_position = new_pos;
                 }
-            }
+    
             KeyCode::Char(c) => {
                 app.input.insert(app.cursor_position, c);
                 app.cursor_position += c.len_utf8();
@@ -453,16 +436,6 @@ fn handle_input(
             app.popup = Popup::EditSystemPrompt;
             app.status = "editing system prompt... (Enter to save, Esc to exit)".to_string();
         }
-        Command::Usage => {
-            app.status = "fetching usage...".to_string();
-            let client = client.clone();
-            let api_key = app.openrouter_key.clone();
-            let tx = tx.clone();
-            tokio::spawn(async move {
-                let res = api::get_usage_daily(&client, &api_key).await.map_err(|e| e.to_string());
-                tx.send(AsyncResult::Usage(res)).ok();
-            });
-        }
         Command::Chat(msg) => {
             if app.messages.is_empty() {
                 app.messages.push(Message {
@@ -477,30 +450,17 @@ fn handle_input(
             });
             app.is_loading = true;
             app.status = "thinking...".to_string();
-
+            
             let client = client.clone();
-            let api_key = app.openrouter_key.clone();
-            let opencode_key = app.opencode_key.clone();
+            let api_keys = app.api_keys.clone();
             let model = app.model.clone();
-            let provider = app.provider;
             let history = app.messages.clone();
             let tx = tx.clone();
 
             tokio::spawn(async move {
-                // Selects the provider chosen via /models.:
-                // If it is OpenCode, call it directly, without a fallback; otherwise, use the standard flow..
-                let res = match provider {
-                    Provider::OpenCode => {
-                        api::send_chat_opencode_direct(&client, opencode_key.as_deref(), &model, &history)
-                            .await
-                            .map_err(|e| e.to_string())
-                    }
-                    Provider::OpenRouter => {
-                        api::send_chat(&client, opencode_key.as_deref(), &api_key, &model, &history)
-                            .await
-                            .map_err(|e| e.to_string())
-                    }
-                };
+                let res = api::send_chat(&client, &api_keys, &model, &history)
+                    .await
+                    .map_err(|e| e.to_string());
                 tx.send(AsyncResult::Chat(res)).ok();
             });
         }
@@ -513,11 +473,11 @@ fn autocomplete(app: &mut App) {
         if let Some(m) = COMMAND_LIST.iter().find(|c| c.starts_with(app.input.as_str())) {
             app.input = m.to_string();
         }
-    } else if let Some(partial) = app.input.strip_prefix("/model ") {
-        if let Some(m) = app.free_models.iter().find(|m| m.contains(partial)) {
+    } else if let Some(partial) = app.input.strip_prefix("/model ") 
+        && let Some(m) = app.free_models.iter().find(|m| m.contains(partial)) {
             app.input = format!("/model {}", m);
         }
-    }
+    
 }
 
 fn copy_to_clipboard(text: &str, app: &mut App) {
