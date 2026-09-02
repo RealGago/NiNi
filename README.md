@@ -40,7 +40,7 @@ Config (theme)	serde + toml
 Installation
 bash
 
-git clone https://codeberg.org/SEU_USUARIO/NiNi3.git
+git clone [https://github.com/RealGago/NiNi.git]
 cd NiNi3
 cargo build --release
 
