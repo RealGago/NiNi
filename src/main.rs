@@ -5,6 +5,7 @@ mod models;
 mod ui;
 mod theme;
 mod providers;
+mod tools;
 use anyhow::Result;
 use app::{App, Popup, Provider, Screen};
 use commands::{parse_command, Command, COMMAND_LIST};
@@ -18,11 +19,14 @@ use std::env;
 use std::io;
 use std::time::Duration;
 use tokio::sync::mpsc;
+use futures::future::join_all;
+use crate::models::ChatResponse;
 
 
 enum AsyncResult {
-    Chat(Result<(String, Option<String>), String>),
+    Chat(Result<(ChatResponse, Option<String>), String>),
     Models(Provider, Result<Vec<String>, String>),
+    NeedsConfirmation(app::PendingToolRun),
 }
 
 enum PopupAction {
@@ -34,6 +38,8 @@ enum PopupAction {
     ConfirmClearYes,
     SelectProvider(usize),
     SelectModel(Provider, usize),
+    ConfirmRunCommandYes,
+    ConfirmRunCommandNo,
 }
 
 #[tokio::main]
@@ -47,6 +53,8 @@ async fn main() -> Result<()> {
     
     let mut app = App::new("openrouter/free".to_string(), free_models);
     let (tx, mut rx) = mpsc::unbounded_channel::<AsyncResult>();
+    let (tool_events_tx , mut tool_events_rx) = mpsc::unbounded_channel::<tools::ToolEvent>();
+
 
     enable_raw_mode()?;
     let mut stdout = io::stdout();
@@ -64,7 +72,7 @@ async fn main() -> Result<()> {
                     if key.kind == KeyEventKind::Press => {
                          match &app.screen {
                             Screen::Splash { .. } => handle_splash_key(key.code, &mut app),
-                            Screen::Chat => handle_chat_key(key.code, key.modifiers, &mut app, &client, &tx),
+                            Screen::Chat => handle_chat_key(key.code, key.modifiers, &mut app, &client, &tx, &tool_events_tx),
                         }                    
                     }
                 
@@ -84,17 +92,74 @@ async fn main() -> Result<()> {
                 _ => {}
             }
         }
+        
+        while let  Ok(event) = tool_events_rx.try_recv() {
+            app.push_tool_event(event);
+        }
+
 
         while let Ok(result) = rx.try_recv() {
             app.is_loading = false;
             match result {
-                AsyncResult::Chat(Ok((reply, notice))) => {
-                    app.messages.push(Message {
-                        role: "assistant".to_string(),
-                        content: reply,
-                    });
-                    app.status = notice.unwrap_or_else(|| "ready".to_string());
-                }
+                AsyncResult::Chat(Ok((chat, notice))) => {
+                    if let Some(choice) = chat.choices.first() {
+                         if let Some(calls) = choice.message.tool_calls.clone() {
+                            app.status = format!("running {} tool call(s)...", calls.len());
+                            app.messages.push(Message {
+                                role: "assistant".to_string(),
+                                content: choice.message.content.clone().unwrap_or_default(),
+                                tool_calls: Some(calls.clone()),
+                                tool_call_id: None,
+                            });
+                            let client = client.clone();
+                            let api_keys = app.api_keys.clone();
+                            let model = app.model.clone();
+                            let mut history = app.messages.clone();
+                            let tool_events_tx = tool_events_tx.clone();
+                            let tx = tx.clone();
+
+
+                            let ctx = tools::ToolContext {
+                                 client: client.clone(),
+                                 api_keys: api_keys.clone(),
+                                 model: model.clone(),
+                                 subagent_tool_defs: build_subagent_tool_defs(),
+                            };
+                            tokio::spawn(async move {
+                                let outcome = tools::execute_tool_batch(&calls, &ctx, &tool_events_tx).await;
+                                match outcome {
+                                    tools::ToolBatchOutcome::Done(results) => {
+                                        history.extend(results);
+                                        let tool_defs = build_tool_defs();
+                                        let res = api::send_chat(&client, &api_keys, &model, &history, &tool_defs)
+                                            .await
+                                            .map_err(|e| e.to_string());
+                                        tx.send(AsyncResult::Chat(res)).ok();
+                                    }
+                                    tools::ToolBatchOutcome::NeedsConfirmation {
+                                        call,
+                                        command,
+                                        results_so_far,
+                                        remaining,
+                                    } => {
+                                        tx.send(AsyncResult::NeedsConfirmation(app::PendingToolRun {
+                                            call,
+                                            command,
+                                            results_so_far,
+                                            remaining,
+                                        }))
+                                        .ok();
+                                    }
+                            }
+                });
+        } else if let Some(text) = &choice.message.content {
+            app.messages.push(Message::assistant(text.clone()));
+            app.status = notice.unwrap_or_else(|| "ready".to_string());
+        }
+    }
+}                     
+
+
                 AsyncResult::Chat(Err(e)) => app.status = format!("error: {}", e),
                 AsyncResult::Models(provider, Ok(models)) => {
                     app.status = format!("loaded {} models from {}", models.len(), provider.label);
@@ -108,6 +173,14 @@ async fn main() -> Result<()> {
                     app.status = format!("error fetching models: {}", e);
                     app.popup = Popup::None;
                 }
+                AsyncResult::NeedsConfirmation(pending) => {
+                    let command = pending.command.clone();
+                    app.pending_tool_run = Some(pending);
+                    app.popup = Popup::ConfirmRunCommand { command };
+                    app.is_loading = false;
+                }   
+
+
             }
         }
 
@@ -184,6 +257,7 @@ fn handle_chat_key(
     app: &mut App,
     client: &reqwest::Client,
     tx: &mpsc::UnboundedSender<AsyncResult>,
+    tool_events_tx: &mpsc::UnboundedSender<tools::ToolEvent>,
 ) {
 
     if modifiers.contains(KeyModifiers::CONTROL) && code == KeyCode::Char('t') {
@@ -291,6 +365,12 @@ fn handle_chat_key(
             KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => PopupAction::Close,
             _ => PopupAction::Handled,
         },
+
+        Popup::ConfirmRunCommand { .. } => match code {
+            KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter => PopupAction::ConfirmRunCommandYes,
+            KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => PopupAction::ConfirmRunCommandNo,
+            _ => PopupAction::Handled,
+        },
     };
 
     match action {
@@ -302,6 +382,22 @@ fn handle_chat_key(
             app.messages.clear();
             app.popup_close();
             app.status = "history cleared".to_string();
+        }
+        PopupAction::ConfirmRunCommandYes => {
+    if let Some(pending) = app.pending_tool_run.take() {
+        app.popup = Popup::None;
+        app.is_loading = true;
+        app.status = "running command...".to_string();
+        spawn_continue_tool_run(client, tx, app, pending, true, &tool_events_tx);
+            }
+        }
+        PopupAction::ConfirmRunCommandNo => {
+            if let Some(pending) = app.pending_tool_run.take() {
+                app.popup = Popup::None;
+                app.is_loading = true;
+                app.status = "command rejected, continuing...".to_string();
+                spawn_continue_tool_run(client, tx, app, pending, false, &tool_events_tx);
+            }
         }
         
     PopupAction::SelectProvider(selected) => {
@@ -438,16 +534,12 @@ fn handle_input(
         }
         Command::Chat(msg) => {
             if app.messages.is_empty() {
-                app.messages.push(Message {
-                    role: "system".to_string(),
-                    content: app.system_prompt.clone(),
-                });
+                app.messages.push(Message::system(app.system_prompt.clone()));            
             }
 
-            app.messages.push(Message {
-                role: "user".to_string(),
-                content: msg,
-            });
+            app.messages.push(Message::user(msg));
+
+
             app.is_loading = true;
             app.status = "thinking...".to_string();
             
@@ -455,10 +547,11 @@ fn handle_input(
             let api_keys = app.api_keys.clone();
             let model = app.model.clone();
             let history = app.messages.clone();
+            let tool_defs = build_tool_defs();            
             let tx = tx.clone();
 
             tokio::spawn(async move {
-                let res = api::send_chat(&client, &api_keys, &model, &history)
+                let res = api::send_chat(&client, &api_keys, &model, &history, &tool_defs)
                     .await
                     .map_err(|e| e.to_string());
                 tx.send(AsyncResult::Chat(res)).ok();
@@ -466,6 +559,88 @@ fn handle_input(
         }
     }
 }
+
+fn build_tool_defs() -> Vec<models::ToolDefinition> {
+    vec![
+        models::ToolDefinition::from_tool(&tools::SpawnSubagent), 
+        models::ToolDefinition::from_tool(&tools::ReadFile),
+        models::ToolDefinition::from_tool(&tools::ListDirectory),
+        models::ToolDefinition::from_tool(&tools::WriteFile),
+        models::ToolDefinition::from_tool(&tools::EditFile),
+        models::ToolDefinition::from_tool(&tools::Grep),
+        models::ToolDefinition::from_tool(&tools::RunCommand),
+        
+    ]
+}
+// Subagents can't spawn more subagents and can't run shell commands.
+fn build_subagent_tool_defs() -> Vec<models::ToolDefinition> {
+    build_tool_defs()
+        .into_iter()
+        .filter(|t| t.function.name != "spawn_subagent" && t.function.name != "run_command")
+        .collect()
+}
+
+fn spawn_continue_tool_run(
+    client: &reqwest::Client,
+    tx: &mpsc::UnboundedSender<AsyncResult>,
+    app: &App,
+    pending: app::PendingToolRun,
+    approved: bool,
+    tool_events_tx: &mpsc::UnboundedSender<tools::ToolEvent>,
+) {
+    let client = client.clone();
+    let api_keys = app.api_keys.clone();
+    let model = app.model.clone();
+    let mut history = app.messages.clone();
+    let tx = tx.clone();
+    let tool_events_tx = tool_events_tx.clone();
+
+    let ctx = tools::ToolContext {
+        client: client.clone(),
+        api_keys: api_keys.clone(),
+        model: model.clone(),
+        subagent_tool_defs: build_subagent_tool_defs(),
+    };
+
+    tokio::spawn(async move {
+        let outcome = tools::continue_after_confirmation(
+            pending.call,
+            approved,
+            pending.results_so_far,
+            pending.remaining,
+            &ctx,
+            &tool_events_tx,
+        )
+        .await;
+        match outcome {
+            tools::ToolBatchOutcome::Done(results) => {
+                history.extend(results);
+                let tool_defs = build_tool_defs();
+                let res = api::send_chat(&client, &api_keys, &model, &history, &tool_defs)
+                    .await
+                    .map_err(|e| e.to_string());
+                tx.send(AsyncResult::Chat(res)).ok();
+            }
+            tools::ToolBatchOutcome::NeedsConfirmation {
+                call,
+                command,
+                results_so_far,
+                remaining,
+            } => {
+                tx.send(AsyncResult::NeedsConfirmation(app::PendingToolRun {
+                    call,
+                    command,
+                    results_so_far,
+                    remaining,
+                }))
+                .ok();
+            }
+        }
+    });
+}
+
+
+
 
 /// Simple autocomplete: Tab completes to the first command/model that matches the typed text.
 fn autocomplete(app: &mut App) {

@@ -63,6 +63,7 @@ pub enum Popup {
     },
     EditSystemPrompt,
     ConfirmClear,
+    ConfirmRunCommand { command: String },
     ThemeEditor {
         field: ThemeField,
         channel: RgbChannel,
@@ -84,6 +85,30 @@ pub enum Screen {
     Chat,
 }
 
+#[derive(Clone)]
+pub struct PendingToolRun {
+    pub call: crate::models::ToolCall,
+    pub command: String,
+    pub results_so_far: Vec<Message>,
+    pub remaining: Vec<crate::models::ToolCall>,
+}
+
+#[derive(Clone)]
+pub struct ToolLogEntry {
+    pub call_id: String,
+    pub name: String,
+    pub args_summary: String,
+    pub status: ToolLogStatus,
+}
+
+#[derive(Clone)]
+pub enum ToolLogStatus {
+    Running,
+    Done { duration_ms: u128 },
+    Error { duration_ms: u128 },
+}
+
+
 pub struct App {
     pub input: String,
     pub messages: Vec<Message>,
@@ -101,6 +126,8 @@ pub struct App {
     pub screen: Screen,
     pub tick : u64,
     pub api_keys: std::collections::HashMap<&'static str, String>,
+    pub pending_tool_run: Option<PendingToolRun>,
+    pub tool_log: Vec<ToolLogEntry>,
 }
 
 impl App{
@@ -143,11 +170,33 @@ pub fn new(model: String, free_models: Vec<String>) -> Self {
         system_prompt: String::from("You are NiNi, a helpful AI assistant inside a TUI"),
         screen,
         api_keys,
+        pending_tool_run: None,
+        tool_log: Vec::new(),
         tick: 0,
         theme: Theme::load(),
     }
 }
-
+    
+    pub fn push_tool_event(&mut self, event: crate::tools::ToolEvent) {
+        match event {
+            crate::tools::ToolEvent::Started { call_id, tool_name, args_summary } => {
+                self.tool_log.push(ToolLogEntry {
+                    call_id,
+                    name: tool_name,
+                    args_summary,
+                    status: ToolLogStatus::Running,
+                });
+            }
+            crate::tools::ToolEvent::Finished { call_id, result, duration_ms } => {
+                if let Some(entry) = self.tool_log.iter_mut().find(|e| e.call_id == call_id) {
+                    entry.status = match result {
+                        Ok(_) => ToolLogStatus::Done { duration_ms },
+                        Err(_) => ToolLogStatus::Error { duration_ms },
+                    };
+                }
+            }
+        }
+    }
 
     pub fn open_models_popup(&mut self) {
         self.popup = Popup::SelectProvider { selected: 0 };

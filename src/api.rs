@@ -1,4 +1,4 @@
-use crate::{models::{ChatResponse, KeyResponse, Message, ModelsResponse}};
+use crate::models::{ChatResponse, KeyResponse, Message, ModelsResponse, ToolDefinition};
 use anyhow::{Context, Result};
 use crate::app::Provider;
 
@@ -13,11 +13,16 @@ async fn send_chat_to_provider(
     api_key: &str,
     model: &str,
     history: &[Message],
-) -> Result<String, ProviderError> {
-    let body = serde_json::json!({
+    tools: &[ToolDefinition],
+) -> Result<ChatResponse, ProviderError> {
+    let mut body = serde_json::json!({
         "model": model,
         "messages": history,
     });
+
+    if !tools.is_empty() {
+        body["tools"] = serde_json::to_value(tools).map_err(|e| ProviderError::Other(e.into()))?;
+    }
 
     let resp = client
         .post(format!("{}/chat/completions", base_url))
@@ -32,18 +37,11 @@ async fn send_chat_to_provider(
         return Err(ProviderError::RateLimited);
     }
 
-    let chat: ChatResponse = resp
-        .json()
+    resp.json::<ChatResponse>()
         .await
-        .map_err(|e| ProviderError::Other(e.into()))?;
-
-    Ok(chat
-        .choices
-        .first()
-        .and_then(|c| c.message.content.clone())
-        .unwrap_or_default())
+        .map_err(|e| ProviderError::Other(e.into()))
 }
-
+  
 fn map_provider_err(e: ProviderError) -> anyhow::Error {
     match e {
         ProviderError::RateLimited => anyhow::anyhow!("provider hit its rate limit"),
@@ -56,18 +54,18 @@ pub async fn send_chat(
     api_keys: &std::collections::HashMap<&'static str, String>,
     model: &str,
     history: &[Message],
-) -> Result<(String, Option<String>)> {
+    tools: &[ToolDefinition],
+) -> Result<(ChatResponse, Option<String>)> {
     let ordered = crate::providers::available_providers_in_fallback_order(api_keys);
 
     if ordered.is_empty() {
           anyhow::bail!("no API key configured for any provider");
     }
 
-
     let mut last_err = None;
     for (i, provider) in ordered.iter().enumerate() {
         let key = &api_keys[provider.key_env];
-        match send_chat_to_provider(client, provider.base_url, key, model, history).await {
+        match send_chat_to_provider(client, provider.base_url, key, model, history, tools).await {
             Ok(reply) => {
                 let notice = if i == 0 {
                     None
