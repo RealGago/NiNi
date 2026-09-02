@@ -1,6 +1,6 @@
-# NiNi3
+# NiNi
 
-A fast, hacker-friendly AI chat client that runs entirely in your terminal (TUI). Built with Rust and [ratatui](https://ratatui.rs), it connects to [OpenRouter](https://openrouter.ai) and [OpenCode Zen](https://opencode.ai) so you can chat with AI models without ever leaving the command line.
+A fast,AI chat client that runs entirely in your terminal (TUI). Built with Rust and [ratatui](https://ratatui.rs), it connects to [OpenRouter](https://openrouter.ai) and [OpenCode Zen](https://opencode.ai) so you can chat with AI models without ever leaving the command line.
 
 > *Named after Ningning (aespa), because why not.*
 
