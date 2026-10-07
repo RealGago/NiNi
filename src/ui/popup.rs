@@ -1,15 +1,14 @@
+use super::colors;
+use super::layout::{centered_rect, centered_rect_fixed};
+use crate::agent::providers;
 use crate::app::{App, Popup};
-use crate::providers;
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap};
-use super::layout::{centered_rect, centered_rect_fixed};
 
 pub fn draw_popup(f: &mut Frame, app: &App, size: Rect) {
     let purple_style = Style::default().fg(app.theme.primary());
-
     match &app.popup {
         Popup::None => {}
-
         Popup::Loading => {
             let area = centered_rect(35, 20, size);
             f.render_widget(Clear, area);
@@ -25,7 +24,11 @@ pub fn draw_popup(f: &mut Frame, app: &App, size: Rect) {
             f.render_widget(loading_widget, area);
         }
 
-        Popup::ThemeEditor { field, channel, input } => {
+        Popup::ThemeEditor {
+            field,
+            channel,
+            input,
+        } => {
             let area = centered_rect(60, 50, size);
             f.render_widget(Clear, area);
 
@@ -53,7 +56,9 @@ pub fn draw_popup(f: &mut Frame, app: &App, size: Rect) {
                 let is_selected = f_item == *field;
                 let marker = if is_selected { "▶ " } else { "  " };
                 let label_style = if is_selected {
-                    Style::default().fg(app.theme.accent()).add_modifier(Modifier::BOLD)
+                    Style::default()
+                        .fg(app.theme.accent())
+                        .add_modifier(Modifier::BOLD)
                 } else {
                     Style::default()
                 };
@@ -76,9 +81,13 @@ pub fn draw_popup(f: &mut Frame, app: &App, size: Rect) {
                 "Editing channel {} (current: {}) — typing: {}",
                 channel.label(),
                 current_val,
-                if input.is_empty() { "_".to_string() } else { input.clone() }
+                if input.is_empty() {
+                    "_".to_string()
+                } else {
+                    input.clone()
+                }
             );
-            let editing = Paragraph::new(editing_text).style(Style::default().fg(Color::Yellow));
+            let editing = Paragraph::new(editing_text).style(Style::default().fg(colors::RUNNING));
             f.render_widget(editing, rows[2]);
 
             let help_lines = vec![
@@ -88,7 +97,7 @@ pub fn draw_popup(f: &mut Frame, app: &App, size: Rect) {
                 Line::from("Enter confirm · R reset · Esc close"),
             ];
 
-            let help = Paragraph::new(help_lines).style(Style::default().fg(Color::DarkGray));
+            let help = Paragraph::new(help_lines).style(Style::default().fg(colors::DIM));
             f.render_widget(help, rows[3]);
         }
 
@@ -109,19 +118,61 @@ pub fn draw_popup(f: &mut Frame, app: &App, size: Rect) {
                         .borders(Borders::ALL)
                         .border_style(purple_style),
                 )
-                .highlight_style(Style::default().bg(app.theme.primary()).fg(Color::Black))
+                .highlight_style(
+                    Style::default()
+                        .bg(app.theme.primary())
+                        .fg(colors::ON_ACCENT),
+                )
+                .highlight_symbol("> ");
+
+            let mut state = ListState::default().with_selected(Some(*selected));
+            f.render_stateful_widget(list, area, &mut state);
+        }
+        Popup::SelectSkill { skills, selected } => {
+            let area = centered_rect(70, 60, size);
+            f.render_widget(Clear, area);
+
+            let title = format!(" Skills ({}) ", skills.len());
+            let skill_items: Vec<ListItem> = skills
+                .iter()
+                .map(|s| {
+                    ListItem::new(vec![Line::from(vec![
+                        Span::styled(&s.name, Style::default().add_modifier(Modifier::BOLD)),
+                        Span::raw("  "),
+                        Span::styled(&s.description, Style::default().fg(colors::DIM)),
+                    ])])
+                })
+                .collect();
+
+            let list = List::new(skill_items)
+                .block(
+                    Block::default()
+                        .title(title)
+                        .borders(Borders::ALL)
+                        .border_style(purple_style),
+                )
+                .highlight_style(
+                    Style::default()
+                        .bg(app.theme.primary())
+                        .fg(colors::ON_ACCENT),
+                )
                 .highlight_symbol("> ");
 
             let mut state = ListState::default().with_selected(Some(*selected));
             f.render_stateful_widget(list, area, &mut state);
         }
 
-        Popup::SelectModel { provider, models, selected } => {
+        Popup::SelectModel {
+            provider,
+            models,
+            selected,
+        } => {
             let area = centered_rect(70, 60, size);
             f.render_widget(Clear, area);
 
             let title = format!(" Provider: {} ", provider.label);
-            let model_items: Vec<ListItem> = models.iter().map(|m| ListItem::new(m.clone())).collect();
+            let model_items: Vec<ListItem> =
+                models.iter().map(|m| ListItem::new(m.clone())).collect();
 
             let list = List::new(model_items)
                 .block(
@@ -130,7 +181,11 @@ pub fn draw_popup(f: &mut Frame, app: &App, size: Rect) {
                         .borders(Borders::ALL)
                         .border_style(purple_style),
                 )
-                .highlight_style(Style::default().bg(app.theme.primary()).fg(Color::Black))
+                .highlight_style(
+                    Style::default()
+                        .bg(app.theme.primary())
+                        .fg(colors::ON_ACCENT),
+                )
                 .highlight_symbol("> ");
 
             let mut state = ListState::default().with_selected(Some(*selected));
@@ -148,7 +203,7 @@ pub fn draw_popup(f: &mut Frame, app: &App, size: Rect) {
                         .title(" [ Configure System Prompt Instructions ] ")
                         .title_alignment(Alignment::Center)
                         .borders(Borders::ALL)
-                        .border_style(Style::default().fg(Color::Cyan)),
+                        .border_style(Style::default().fg(colors::USER)),
                 );
             f.render_widget(prompt_input, area);
         }
@@ -159,12 +214,16 @@ pub fn draw_popup(f: &mut Frame, app: &App, size: Rect) {
 
             let confirm = Paragraph::new("Clear conversation history? (y/n)")
                 .alignment(Alignment::Center)
-                .style(Style::default().fg(Color::Red).add_modifier(Modifier::BOLD))
+                .style(
+                    Style::default()
+                        .fg(colors::ERROR)
+                        .add_modifier(Modifier::BOLD),
+                )
                 .block(
                     Block::default()
                         .title(" Confirm ")
                         .borders(Borders::ALL)
-                        .border_style(Style::default().fg(Color::Red)),
+                        .border_style(Style::default().fg(colors::ERROR)),
                 );
             f.render_widget(confirm, area);
         }

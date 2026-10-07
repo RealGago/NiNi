@@ -1,11 +1,15 @@
+use crate::lsp::{self, LspManager};
 use async_trait::async_trait;
+use std::sync::Arc;
+use tokio::sync::Mutex;
 
 #[derive(Clone)]
 pub struct ToolContext {
     pub client: reqwest::Client,
     pub api_keys: std::collections::HashMap<&'static str, String>,
     pub model: String,
-    pub subagent_tool_defs: Vec<crate::models::ToolDefinition>,
+    pub subagent_tool_defs: Vec<crate::agent::models::ToolDefinition>,
+    pub lsp_manager: Arc<tokio::sync::Mutex<crate::lsp::LspManager>>,
 }
 
 #[async_trait]
@@ -17,25 +21,39 @@ pub trait Tool {
 }
 
 pub enum ToolEvent {
-    Started { call_id: String, tool_name: String, args_summary: String },
-    Finished { call_id: String, result: Result<String, String>, duration_ms: u128 },
+    Started {
+        call_id: String,
+        tool_name: String,
+        args_summary: String,
+    },
+    Finished {
+        call_id: String,
+        result: Result<String, String>,
+        duration_ms: u128,
+    },
 }
 
-mod read_file;
-mod list_directory;
-mod write_file;
 mod edit_file;
-mod grep;
-mod run_command;
 mod exec;
+mod find_symbol;
+mod goto_definition;
+mod grep;
+mod list_directory;
+mod read_file;
+mod run_command;
 mod sandbox;
 mod spawn_subagent;
-pub use read_file::ReadFile;
-pub use list_directory::ListDirectory;
-pub use write_file::WriteFile;
+mod write_file;
 pub use edit_file::EditFile;
+pub use exec::{
+    ToolBatchOutcome, continue_after_confirmation, execute_tool_batch, execute_tool_call,
+};
+pub use find_symbol::FindSymbol;
+pub use goto_definition::GotoDefinition;
 pub use grep::Grep;
+pub use list_directory::ListDirectory;
+pub use read_file::ReadFile;
 pub use run_command::RunCommand;
-pub use exec::{execute_tool_call, execute_tool_batch, continue_after_confirmation, ToolBatchOutcome};
 pub use sandbox::resolve_within_root;
 pub use spawn_subagent::SpawnSubagent;
+pub use write_file::WriteFile;

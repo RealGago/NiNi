@@ -1,13 +1,15 @@
 use crate::app::{App, ToolLogStatus};
 use crate::theme::Theme;
+use crate::ui::colors;
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, Wrap};
 use pulldown_cmark::{Event, Parser, Tag};
 use super::popup;
 
+
 pub fn markdown_to_lines(text: &str, theme: &Theme) -> Vec<Line<'static>> {
     let code_bg = theme.code_bg();
-    let inline_code_style = Style::default().fg(Color::Rgb(255, 180, 100)).bg(code_bg);
+    let inline_code_style = Style::default().fg(colors::CODE_ACCENT).bg(code_bg);
     let code_block_style = Style::default().fg(theme.code()).bg(code_bg);
     let heading_style = Style::default().fg(theme.primary()).add_modifier(Modifier::BOLD);
     let bullet_style = Style::default().fg(theme.accent());
@@ -81,7 +83,7 @@ pub fn markdown_to_lines(text: &str, theme: &Theme) -> Vec<Line<'static>> {
                 flush(&mut current, &mut lines);
                 lines.push(Line::from(Span::styled(
                     "─".repeat(40),
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(colors::DIM),
                 )));
             }
             _ => {}
@@ -101,39 +103,65 @@ pub fn draw_chat(f: &mut Frame, app: &App) {
             Constraint::Min(3),
             Constraint::Length(3),
             Constraint::Length(1),
+            Constraint::Length(1),
         ])
         .split(size);
 
     let purple_style = Style::default().fg(app.theme.primary());
 
-    let banner_text = format!("NiNi — model: {}", app.model);
-    let banner = Paragraph::new(banner_text)
-        .style(purple_style)
+    let mut tab_spans: Vec<Span> = Vec::new();
+    for (i, session) in app.sessions.iter().enumerate() {
+        let is_active = i == app.active_session;
+
+        let indicator = if session.is_loading {
+            Span::styled("● ", Style::default().fg(colors::RUNNING))
+        } else if session.tool_log.iter().any(|e| matches!(e.status, crate::app::ToolLogStatus::Error { .. })) {
+            Span::styled("● ", Style::default().fg(colors::ERROR))
+        } else {
+            Span::styled("○ ", Style::default().fg(colors::DIM))
+        };
+
+        let label = format!(" {} ", session.model);
+        let style = if is_active {
+            Style::default().fg(app.theme.primary()).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(colors::DIM)
+        };
+        if i > 0 {
+            tab_spans.push(Span::raw(" | "));
+        }
+        tab_spans.push(indicator);
+        tab_spans.push(Span::styled(label, style));
+    }
+
+    let banner = Paragraph::new(Line::from(tab_spans))
         .alignment(Alignment::Center)
         .block(
             Block::default()
                 .borders(Borders::ALL)
                 .border_style(purple_style)
-                .title(" nini-tui "),
+                .title(" nini "),
         );
     f.render_widget(banner, chunks[0]);
 
-    let user_style = Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD);
+
+
+    let user_style = Style::default().fg(colors::USER).add_modifier(Modifier::BOLD);
     let assistant_style = Style::default().fg(app.theme.primary()).add_modifier(Modifier::BOLD);
 
     let mut lines: Vec<Line> = Vec::new();
-    if !app.tool_log.is_empty() {
-        for entry in &app.tool_log {
+    if !app.session().tool_log.is_empty() {
+        for entry in &app.session().tool_log {
             let (marker, marker_style, extra) = match &entry.status {
-                ToolLogStatus::Running => ("→", Style::default().fg(Color::Yellow), String::new()),
+                ToolLogStatus::Running => ("→", Style::default().fg(colors::RUNNING), String::new()),
                 ToolLogStatus::Done { duration_ms } => (
                     "✓",
-                    Style::default().fg(Color::Green),
+                    Style::default().fg(colors::SUCCESS),
                     format!(" — {}ms", duration_ms),
                 ),
                 ToolLogStatus::Error { duration_ms } => (
                     "✗",
-                    Style::default().fg(Color::Red),
+                    Style::default().fg(colors::ERROR),
                     format!(" — {}ms", duration_ms),
                 ),
             };
@@ -148,7 +176,7 @@ pub fn draw_chat(f: &mut Frame, app: &App) {
                 Span::raw("   "),
                 Span::styled(format!("{} ", marker), marker_style),
                 Span::styled(entry.name.clone(), Style::default().add_modifier(Modifier::BOLD)),
-                Span::styled(format!("({})", summary), Style::default().fg(Color::DarkGray)),
+                Span::styled(format!("({})", summary), Style::default().fg(colors::DIM)),
                 Span::styled(extra, Style::default().fg(Color::DarkGray)),
             ]);
             lines.push(line);
@@ -156,7 +184,7 @@ pub fn draw_chat(f: &mut Frame, app: &App) {
         lines.push(Line::from(""));
     }
 
-    for m in &app.messages {
+    for m in &app.session().messages {
         let (style, align, is_user) = match m.role.as_str() {
             "user" => (user_style, Alignment::Right, true),
             "assistant" => (assistant_style, Alignment::Left, false),
@@ -186,7 +214,7 @@ pub fn draw_chat(f: &mut Frame, app: &App) {
         if !is_user {
             let copy_hint = Line::from(vec![
                 Span::raw("      └─ "),
-                Span::styled(" 📋 [F2] Copy Response ", Style::default().fg(Color::DarkGray)),
+                Span::styled(" 📋 [F2] Copy Response ", Style::default().fg(colors::DIM)),
             ])
             .alignment(Alignment::Left);
             lines.push(copy_hint);
@@ -208,7 +236,7 @@ pub fn draw_chat(f: &mut Frame, app: &App) {
     }
 
     let max_scroll = total_virtual_lines.saturating_sub(inner_chat_height);
-    let clamped_scroll = if app.scroll > max_scroll { max_scroll } else { app.scroll };
+    let clamped_scroll = if app.session().scroll > max_scroll { max_scroll } else { app.session().scroll };
     let final_offset = max_scroll.saturating_sub(clamped_scroll);
 
     let history = Paragraph::new(lines)
@@ -234,9 +262,12 @@ pub fn draw_chat(f: &mut Frame, app: &App) {
         f.render_stateful_widget(scrollbar, chunks[1], &mut scrollbar_state);
     }
 
-    let input_title = if app.is_loading { " ( thinking... ) > " } else { " you > " };
-    let input = Paragraph::new(app.input.as_str()).block(
+    let input_title = if app.session().is_loading { " ( thinking... ) > " } else { " you > " };
+    let input = Paragraph::new(app.input.as_str())
+        .style(Style::default().fg(colors::FG))
+        .block(
         Block::default()
+            .style(Style::default().bg(colors::INPUT_BG))
             .borders(Borders::ALL)
             .border_style(purple_style)
             .title(input_title),
@@ -245,13 +276,38 @@ pub fn draw_chat(f: &mut Frame, app: &App) {
 
     f.set_cursor_position((chunks[2].x + 1 + app.cursor_position as u16, chunks[2].y + 1));
 
-    let status_text = if clamped_scroll > 0 {
-        format!("{}  •  ↕ scrolled up — PageDown to jump to latest", app.status)
-    } else {
-        app.status.clone()
-    };
-    let status = Paragraph::new(status_text).style(Style::default().fg(Color::Yellow));
-    f.render_widget(status, chunks[3]);
+    
+    let status_line = Paragraph::new(app.status.as_str())
+        .style(Style::default().fg(colors::DIM))
+        .alignment(Alignment::Center);
+    f.render_widget(status_line, chunks[3]);
+
+
+    let hotbar = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage(33),
+            Constraint::Percentage(34),
+            Constraint::Percentage(33),
+        ])
+        .split(chunks[4]);
+
+    let tokens_text = "Tk: --";
+    let tokens = Paragraph::new(tokens_text)
+        .style(Style::default().fg(colors::DIM))
+        .alignment(Alignment::Left);
+    f.render_widget(tokens, hotbar[0]);
+
+     let brand = Paragraph::new("nini")
+        .style(Style::default().fg(app.theme.primary()).add_modifier(Modifier::BOLD))
+        .alignment(Alignment::Center);
+    f.render_widget(brand, hotbar[1]);
+
+    let model_text = format!("{} · {}", app.session().model, app.session().provider.label);
+    let model_info = Paragraph::new(model_text)
+        .style(Style::default().fg(colors::DIM))
+        .alignment(Alignment::Right);
+    f.render_widget(model_info, hotbar[2]);
 
     popup::draw_popup(f, app, size);
 }

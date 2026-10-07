@@ -1,4 +1,4 @@
-use crate::models::{ChatResponse, KeyResponse, Message, ModelsResponse, ToolDefinition};
+use crate::agent::models::{ChatResponse, Message, ModelsResponse, ToolDefinition};
 use anyhow::{Context, Result};
 use crate::app::Provider;
 
@@ -56,7 +56,7 @@ pub async fn send_chat(
     history: &[Message],
     tools: &[ToolDefinition],
 ) -> Result<(ChatResponse, Option<String>)> {
-    let ordered = crate::providers::available_providers_in_fallback_order(api_keys);
+    let ordered = crate::agent::providers::available_providers_in_fallback_order(api_keys);
 
     if ordered.is_empty() {
           anyhow::bail!("no API key configured for any provider");

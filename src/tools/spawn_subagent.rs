@@ -1,5 +1,5 @@
-use crate::models::{Message, ToolDefinition};
-use crate::api;
+use crate::agent::models::Message;
+use crate::agent::api;
 use super::{Tool, ToolEvent, ToolContext, exec::execute_tool_batch, ToolBatchOutcome};
 use tokio::sync::mpsc::UnboundedSender;
 use async_trait::async_trait;

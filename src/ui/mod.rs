@@ -2,7 +2,8 @@ mod layout;
 mod splash;
 mod chat;
 mod popup;
-
+mod colors;
+pub mod commands;
 use crate::app::{App, Screen};
 use ratatui::Frame;
 

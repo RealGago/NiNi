@@ -1,4 +1,4 @@
-use crate::models::{Message, ToolCall};
+use crate::agent::models::{Message, ToolCall};
 use super::{Tool, ToolEvent, ToolContext};
 use tokio::sync::mpsc::UnboundedSender;
 
@@ -29,8 +29,10 @@ pub async fn execute_tool_call(
             let task = args["task"].as_str().unwrap_or("").to_string();
             super::spawn_subagent::run_subagent_task(ctx, task, events).await
         }
+        "goto_definition" => super::goto_definition::run_goto_definition(ctx, args).await,
+        "find_symbol" => super::find_symbol::run_find_symbol(ctx, args).await,
         other => Err(format!("unknow tool: {}", other)),
-    };
+        };
 
     let duration_ms = start.elapsed().as_millis();
     let _ = events.send(ToolEvent::Finished { 
