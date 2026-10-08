@@ -1,187 +1,185 @@
-NiNi
+# NiNi
 
-A fast, AI chat client that runs entirely in your terminal (TUI). Built with Rust and ratatui, it connects to OpenRouter and OpenCode Zen so you can chat with AI models without ever leaving the command line.
+A fast AI chat client that runs entirely in your terminal. Built with Rust and [ratatui](https://github.com/ratatui/ratatui), it talks to OpenAI-compatible providers (OpenRouter and OpenCode Zen out of the box) and can read, search, edit and run things in your project through tool calls.
 
-    Named after Ningning (aespa), because why not.
+> Named after Ningning (aespa), because why not.
 
-Features
+## Features
 
-    Terminal-native chat — smooth, responsive TUI with no browser or Electron overhead
+- **Terminal-native TUI**: no browser, no Electron.
+- **Multiple providers**: switch between OpenRouter (free models) and OpenCode Zen with `/models`. Providers are tried in a fallback order when one fails.
+- **Tools the AI can call**: `read_file`, `write_file`, `edit_file`, `list_directory`, `grep`, `run_command`, `spawn_subagent`, and the LSP-backed `find_symbol` and `goto_definition`.
+- **LSP integration**: the AI can ask a real language server (for example rust-analyzer) where a symbol is defined, instead of guessing with text search.
+- **Subagents**: the main agent can delegate tasks to subagents that run with an isolated context (they do not see the main conversation), which keeps token usage down.
+- **Skills**: reusable instruction files (commit messages, PR review, code explanation) that you can invoke with `/skill` or let the AI use on its own.
+- **Multiple sessions**: open a new chat with `Ctrl+N` and jump between them with `Alt+1` to `Alt+9`.
+- **Markdown rendering**: headers, lists, bold, italics, inline code and code blocks.
+- **Live theme editor**: `Ctrl+T`, with a real-time RGB preview.
+- **Mouse support**: scroll the history with the wheel, copy the last answer with the `[Copy]` button or `F2`.
 
-    Multiple providers — switch between OpenRouter (free models) and OpenCode Zen on the fly with /models
+## Safety model
 
-    Markdown rendering — bold, italics, headers, bullet lists, inline code, and code blocks render properly instead of showing raw symbols
+- File tools (`read_file`, `write_file`, `edit_file`, ...) are restricted to the directory where you launched NiNi. Paths that escape it (`..`, absolute paths elsewhere, symlinks) are rejected.
+- `run_command` is **not** sandboxed. It runs through `sh -c` in the current directory, and the only protection is the confirmation popup that appears before each command. Read the command before accepting.
+- File writes and edits also ask for confirmation.
 
-    Live theme editor — press Ctrl+T to customize every accent color with a real-time RGB preview, saved automatically to theme.toml
+## Installation
 
-    Smart text input — full cursor navigation (arrow keys, backspace) with proper UTF-8 handling for accented characters
+Requires a recent Rust toolchain (the project uses Rust edition 2024, so Rust 1.85 or newer).
 
-    Mouse support — scroll the chat history with your mouse wheel, click the [Copy] button to copy the last AI response to your clipboard
-
-    Animated splash screen — an animated ASCII intro handles first-run API key setup
-
-    Command system — slash commands for switching models, editing the system prompt, checking usage, and clearing history
-
-    Subagent system — main agent can autonomously delegate tasks to specialized subagents for parallel execution
-
-    File operations — read, write, create, and edit files directly through the AI with confirmation popups
-
-    Command execution — run system commands (e.g., cargo build, npm install) with user confirmation
-
-Tech Stack
-Purpose	Crate
-TUI rendering	ratatui
-Terminal control / input	crossterm
-Async runtime	tokio
-HTTP client	reqwest
-Clipboard	arboard
-Markdown parsing	pulldown-cmark
-Config (theme)	serde + toml
-Installation
-bash
-
-git clone [https://github.com/RealGago/NiNi.git]
-cd NiNi3
+```bash
+git clone https://github.com/RealGago/NiNi.git
+cd NiNi
 cargo build --release
+```
 
-The compiled binary will be at target/release/NiNi3.
+The binary is `target/release/NiNi3`. Run it from the project you want the AI to work on, since file access is limited to the current directory.
 
-    Note: cargo install nini is not officially supported. Build from source.
+## API keys
 
-Setup — API Keys
+NiNi needs at least one key:
 
-NiNi needs at least one of the following:
+| Provider | Environment variable |
+| --- | --- |
+| OpenRouter (free models) | `OPENROUTER_API_KEY` |
+| OpenCode Zen | `OPENCODE_API_KEY` |
 
-    An OpenRouter API key (gives you access to free models)
+Either copy the example file and edit it:
 
-    An OpenCode Zen API key
-
-    Any OpenAI-compatible API provider (will work, but /listmodels may be limited)
-
-You have two ways to provide them:
-
-Option 1 — .env file
-bash
-
+```bash
 cp .env.example .env
-# then edit .env and paste your key(s) in
+```
 
-Option 2 — first-run splash screen
+or just launch NiNi. If no keys are found, the splash screen asks for them (leave a field empty and press Enter to skip it).
 
-If no .env is found, NiNi will ask for your API key(s) directly the first time you launch it. Leave a field empty and press Enter to skip it.
-Usage
+## Usage
 
-Run it with:
-bash
-
-cargo run --release
-
-or directly:
-bash
-
+```bash
 ./target/release/NiNi3
+# or, during development
+cargo run --release
+```
 
-Keyboard Shortcuts
-Key	Action
-Enter	Send message / confirm
-Esc	Quit / cancel
-Tab	Autocomplete command or model name
-F2	Copy last AI response to clipboard
-Ctrl+T	Open the theme editor
-↑ / ↓	Navigate popups / scroll (theme editor: change field)
-PageUp / PageDown	Scroll chat history
-Mouse wheel	Scroll chat history
-Slash Commands
-Command	Description
-/system	Edit the system prompt
-/usage	Check today's OpenRouter usage
-/clear	Clear the conversation history
-/models	Switch provider/model
-/model <name>	Switch directly to a specific model
-Subagent System
+### Keyboard shortcuts
 
-NiNi features an autonomous subagent system where the main AI can decide to delegate tasks to specialized subagents for:
+| Key | Action |
+| --- | --- |
+| `Enter` | Send message / confirm |
+| `Esc` | Quit / cancel |
+| `Tab` | Autocomplete command or model name |
+| `F2` | Copy last AI response to the clipboard |
+| `Ctrl+T` | Open the theme editor |
+| `Ctrl+N` | New chat session |
+| `Alt+1` ... `Alt+9` | Go to session 1 to 9 |
+| `PageUp` / `PageDown`, mouse wheel | Scroll the chat |
+| `Up` / `Down` | Navigate popups |
 
-    Code analysis — deep dive into codebases
+### Slash commands
 
-    File operations — read, write, and edit files
+| Command | Description |
+| --- | --- |
+| `/models` | Pick a provider, then a model |
+| `/model <name>` | Switch directly to a model |
+| `/system` | Edit the system prompt |
+| `/skills` | List available skills |
+| `/skill <name>` | Invoke a skill |
+| `/clear` | Clear the conversation history |
+| `/exit` | Quit |
 
-    Command execution — run system commands (e.g., cargo build)
+## LSP setup
 
-How it works:
+LSP support is opt-in: NiNi does not ship with any language server configured. Create `~/.config/nini/lsp.toml` (global) or `.nini/lsp.toml` (per project, overrides the global one):
 
-    Main agent receives your request
+```toml
+[lsp.rust]
+command = "rust-analyzer"
+extensions = [".rs"]
+root_markers = ["Cargo.toml"]
 
-    If the task is complex, it spawns a subagent
+# optional
+# args = []
+# env = { RA_LOG = "error" }
+```
 
-    Subagent executes the task in parallel
+- `extensions` must include the leading dot.
+- `root_markers` are used to find the project root for the language server.
+- The server is started lazily, the first time a tool needs it for a matching file.
 
-    Results are returned to the main agent
+Once configured, the AI gets two extra tools:
 
-    Main agent incorporates the results into its final response
+- `find_symbol`: find where a function, struct or other symbol is defined, by name, anywhere in the project.
+- `goto_definition`: from a known file and line where a symbol is used, jump to its declaration.
 
-Current limitations:
+## Skills
 
-    Maximum concurrent subagents: 1 (configurable in code)
+A skill is a folder under `skills/` (in the project) or `~/.config/nini/skills/` (global) containing a `SKILL.md`:
 
-    Subagents operate with an isolated context (they don't see the main conversation history) — intentional to reduce token consumption
+```
+skills/
+  commit/
+    SKILL.md
+```
 
-Theme Editor
+```markdown
+---
+name: commit
+description: Creates commits following Conventional Commits
+user_invocable: true
+disable_model_invocation: false
+---
 
-Press Ctrl+T to open the live theme editor:
-Key	Action
-↑ / ↓	Select which color to edit
-Tab	Switch between R / G / B channels
-0-9	Type a value (0-255)
-Enter	Confirm the value
-R	Reset all colors to default
-Esc	Close the editor
+# Commit
 
-Changes are saved automatically to theme.toml in the project root and reloaded on every launch.
-Support & Troubleshooting
-Something went wrong?
+Instructions for the AI go here.
+```
 
-If you encounter an issue:
+| Field | Meaning |
+| --- | --- |
+| `name`, `description` | Required. |
+| `user_invocable` | The skill appears in `/skills` and can be run with `/skill <name>`. |
+| `disable_model_invocation` | If `true`, only you can trigger it, the AI will not use it on its own. |
 
-    Check the GitHub Issues — open a new issue with:
+Project skills take priority over global skills with the same name.
 
-        Description of the problem
+## Subagents
 
-        Steps to reproduce
+For complex tasks the main agent can spawn subagents (code analysis, file operations, command execution) and merge their results back into its answer. Subagents have an isolated context on purpose, to reduce token consumption.
 
-        Error message (if any)
+## Theme
 
-        Your OS and terminal emulator
+Press `Ctrl+T` to edit every accent color with a live RGB preview. Colors are saved to `theme.toml` in the directory where you run NiNi and loaded on every launch. The file is git-ignored.
 
-    Check logs — look at ~/.cache/nini/logs/ for debug information
+| Key | Action |
+| --- | --- |
+| `Up` / `Down` | Select the color to edit |
+| `Tab` | Switch between R / G / B |
+| `0`-`9` | Type a value (0-255) |
+| `Enter` | Confirm the value |
+| `R` | Reset all colors to default |
+| `Esc` | Close the editor |
 
-    Common issues:
+## Adding a provider
 
-        API key not working — verify .env file is in the project root and keys are correct
+Providers are data, not code. Add one entry to `PROVIDERS` in `src/agent/providers.rs` with its base URL, the environment variable for its key, and its fallback priority. The provider must expose OpenAI-compatible `/models` and `/chat/completions` endpoints.
 
-        Commands not executing — commands require confirmation by default for security
+## Project layout
 
-        Theme not saving — ensure theme.toml directory is writable
+```
+src/
+  agent/    API client, message models, providers
+  lsp/      LSP client, manager, config
+  skills/   skill loader
+  tools/    tools the AI can call, path sandbox
+  ui/       chat, popups, commands, colors, splash, layout
+  app.rs    application state
+  main.rs   event loop
+skills/     example skills
+```
 
-Customization
+## Contributing
 
-NiNi is highly customizable:
+Not accepting pull requests at this time, this is a personal hobby project. Bug reports and suggestions are welcome as [issues](https://github.com/RealGago/NiNi/issues).
 
-    Theme — edit colors with the live theme editor (Ctrl+T) or directly in theme.toml
+## Disclaimer
 
-    Splash screen — the ASCII art intro is customizable (modify src/splash.rs)
-
-    API providers — works with any OpenAI-compatible API (OpenRouter, OpenCode Zen, etc.)
-
-    Subagent limit — adjustable in the source code (currently hardcoded to 1)
-
-    Note on providers: NiNi works with any OpenAI-compatible API, but /listmodels may not work consistently because each provider has its own endpoint format. OpenRouter and OpenCode Zen are officially supported.
-
-Contributing
-
-Not accepting pull requests at this time. This is a personal hobby project.
-
-If you find bugs or have suggestions, please open an issue on GitHub.
-Disclaimer
-
-NiNi is an independent, unaffiliated hobby project. Do not enter API keys or sensitive information beyond what's needed to authenticate with the providers above — you are solely responsible for everything you send to these models.
+NiNi is an independent, unaffiliated hobby project. Your prompts and any file contents the AI reads are sent to the provider you choose, so do not use it on anything you would not want to send to that provider. You are responsible for what you send to the models and for the commands you approve.
