@@ -37,7 +37,7 @@ impl Tool for FindSymbol {
 
 pub async fn run_find_symbol(ctx: &ToolContext, args: Value) -> Result<String, String> {
     let name = args["name"].as_str().ok_or("missing 'name'")?;
-    eprintln!("[find_symbol] Looking for: {}", name); // ← LOG
+    nlog!("[find_symbol] Looking for: {}", name); // ← LOG
     // Opt 1: use 'file' if provided
     // Opt 2: it attempts to detect the language through the current project
     let path = if let Some(file) = args["file"].as_str() {
@@ -60,7 +60,7 @@ pub async fn run_find_symbol(ctx: &ToolContext, args: Value) -> Result<String, S
     let main_file = root.join("src/main.rs");
     if main_file.exists() {
         if let Ok(text) = std::fs::read_to_string(&main_file) {
-            eprintln!(
+            nlog!(
                 "[find_symbol] Opening {} to trigger indexing",
                 main_file.display()
             );
@@ -69,13 +69,13 @@ pub async fn run_find_symbol(ctx: &ToolContext, args: Value) -> Result<String, S
             tokio::time::sleep(std::time::Duration::from_secs(2)).await;
         }
     }
-    eprintln!("[find_symbol] Using path: {:?}", path); // ← LOG
-    eprintln!("[find_symbol] LSP started"); // ← LOG
+    nlog!("[find_symbol] Using path: {:?}", path); // ← LOG
+    nlog!("[find_symbol] LSP started"); // ← LOG
     let result = client
         .workspace_symbol(name)
         .await
         .map_err(|e| e.to_string())?;
-    eprintln!("[find_symbol] Raw result: {:?}", result); // ← LOG
+    nlog!("[find_symbol] Raw result: {:?}", result); // ← LOG
     format_symbol_result(result)
 }
 

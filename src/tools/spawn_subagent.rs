@@ -52,7 +52,7 @@ pub async fn run_subagent_task(
     task: String,
     events: &UnboundedSender<ToolEvent>,
 ) -> Result<String, String> {
-    println!("[subagent started] task: {}", task);
+    nlog!("[subagent started] task: {}", task);
     let mut history = vec![Message::user(task.clone())];
 
     loop {
@@ -86,7 +86,7 @@ pub async fn run_subagent_task(
                 }
             }
         } else {
-            println!("[subagent started] task: {}", task);
+            nlog!("[subagent started] task: {}", task);
             return Ok(choice.message.content.clone().unwrap_or_default());
         }
         

@@ -1,3 +1,5 @@
+#[macro_use]
+mod log;
 mod agent;
 mod app;
 mod lsp;

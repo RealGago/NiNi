@@ -37,10 +37,10 @@ impl LspManager {
         // Find the project root (search for root_markers)
         let project_root = find_project_root(path, &config.root_markers)
             .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
-        eprintln!(
+        crate::log::log(&format!(
             "[lsp] Starting {} with root: {:?}",
             config.command, project_root
-        );
+        ));
 
         let client = LspClient::start_with_config(config, &project_root).await?;
         let client = Arc::new(Mutex::new(client));

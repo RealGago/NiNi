@@ -24,7 +24,7 @@ pub struct Skill {
 pub fn load_all_skills() -> Vec<Skill> {
     let mut skills = Vec::new();
 
-    // Project skills (folder 'skills/' in the root directory) 
+    // Project skills (folder 'skills/' in the root directory)
     skills.extend(load_skills_from_dir(&PathBuf::from("skills")));
 
     // Global user skils
@@ -60,16 +60,12 @@ pub fn load_skills_from_dir(dir: &Path) -> Vec<Skill> {
 }
 
 fn parse_skill(content: &str, path: PathBuf) -> Option<Skill> {
-    let parts: Vec<&str> = content.splitn(3, "---").collect();
-    if parts.len() < 3  {
-        eprintln!("Skill in {:?} does not have a valid frontmatter", path);
-        return None;
-    }
+    let rest = content.trim_start().strip_prefix("---")?;
+    let (fm_str, body) = rest.split_once("\n---")?;
 
-    let frontmatter: SkillFrontmatter = match serde_yaml::from_str(parts[1]) {
+    let frontmatter: SkillFrontmatter = match serde_yaml::from_str(fm_str) {
         Ok(fm) => fm,
         Err(e) => {
-            eprintln!("Error parsing frontmatter of {:?}: {}", path, e);
             return None;
         }
     };
@@ -77,7 +73,7 @@ fn parse_skill(content: &str, path: PathBuf) -> Option<Skill> {
     Some(Skill {
         name: frontmatter.name,
         description: frontmatter.description,
-        instructions: parts[2].trim().to_string(),
+        instructions: body.trim().to_string(),
         path,
         user_invocable: frontmatter.user_invocable,
         disable_model_invocation: frontmatter.disable_model_invocation,
