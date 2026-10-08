@@ -29,5 +29,5 @@ pub fn parse_command(input: &str) -> Command {
 
 /// List of available commands, used for Tab autocomplete.
 pub const COMMAND_LIST: [&str; 8] = [
-    "/exit", "/clear", "/models", "/usage", "/model ", "/system", "/skills ", "skill ",
+    "/exit", "/clear", "/models", "/usage", "/model ", "/system", "/skills", "/skill ",
 ];

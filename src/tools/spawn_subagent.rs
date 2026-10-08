@@ -1,15 +1,17 @@
-use crate::agent::models::Message;
+use super::{Tool, ToolBatchOutcome, ToolContext, ToolEvent, exec::execute_tool_batch};
 use crate::agent::api;
-use super::{Tool, ToolEvent, ToolContext, exec::execute_tool_batch, ToolBatchOutcome};
-use tokio::sync::mpsc::UnboundedSender;
+use crate::agent::models::Message;
 use async_trait::async_trait;
 use serde_json::json;
+use tokio::sync::mpsc::UnboundedSender;
 
 pub struct SpawnSubagent;
 
 #[async_trait]
 impl Tool for SpawnSubagent {
-    fn name(&self) -> &str { "spawn_subagent" }
+    fn name(&self) -> &str {
+        "spawn_subagent"
+    }
 
     fn description(&self) -> &str {
         "Delegate an independent task to a subagent that runs in parallel. \
@@ -26,7 +28,8 @@ impl Tool for SpawnSubagent {
      \
      Do NOT use spawn_subagent if one part needs another part's output, or \
      if two subtasks would need to write to the same file — handle those \
-     sequentially in the main agent instead."    }
+     sequentially in the main agent instead."
+    }
 
     fn schema(&self) -> serde_json::Value {
         json!({
@@ -56,13 +59,15 @@ pub async fn run_subagent_task(
     let mut history = vec![Message::user(task.clone())];
 
     loop {
-        let res = api::send_chat(&ctx.client, &ctx.api_keys, &ctx.model, &history, &ctx.subagent_tool_defs)
-            .await
-            .map_err(|e| e.to_string())?;
-
-        let (chat, _notice) = api::send_chat(&ctx.client, &ctx.api_keys, &ctx.model, &history, &ctx.subagent_tool_defs)
-            .await
-            .map_err(|e| e.to_string())?;
+        let (chat, _notice) = api::send_chat(
+            &ctx.client,
+            &ctx.api_keys,
+            &ctx.model,
+            &history,
+            &ctx.subagent_tool_defs,
+        )
+        .await
+        .map_err(|e| e.to_string())?;
 
         let choice = chat.choices.first().ok_or("no choice returned")?;
 
@@ -89,6 +94,5 @@ pub async fn run_subagent_task(
             nlog!("[subagent started] task: {}", task);
             return Ok(choice.message.content.clone().unwrap_or_default());
         }
-        
     }
 }

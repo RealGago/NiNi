@@ -1,4 +1,4 @@
-use super::{resolve_within_root, Tool};
+use super::{Tool, resolve_within_root};
 
 pub struct ReadFile;
 
@@ -8,7 +8,10 @@ impl Tool for ReadFile {
         "read_file"
     }
     fn description(&self) -> &str {
-        "Reads the contents of a file at the given path (must be inside the project directory)"
+        "Reads the full contents of a file. For finding where a symbol is defined, \
+        prefer find_symbol or goto_definition, which are cheaper and more precise. \
+        Use this when you need the actual code, for example after an LSP tool \
+        tells you which file and line to look at."
     }
     fn schema(&self) -> serde_json::Value {
         serde_json::json!({
