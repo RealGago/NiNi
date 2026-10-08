@@ -232,7 +232,17 @@ impl App {
             should_quit: false,
             free_models,
             popup: Popup::None,
-            system_prompt: String::from("You are NiNi, a helpful AI assistant inside a TUI"),
+            system_prompt: String::from(
+                "You are NiNi, a helpful AI assistant inside a terminal UI.
+            Code navigation:
+            - To find where a function, struct or any symbol is defined, use find_symbol first.
+            - If you already know a file and line where a symbol is used, use goto_definition.
+            - Use grep only for plain-text searches (strings, comments, config values).
+            - Read a whole file with read_file only when you need its full contents, \
+            and prefer reading just the region the LSP result points to.
+            - If an LSP tool reports that no language server is configured for a file type, \
+            fall back to grep and read_file.",
+            ),
             screen,
             api_keys,
             pending_tool_run: None,
